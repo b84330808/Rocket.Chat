@@ -1,60 +1,13 @@
 import type * as http from 'node:http';
-import type { TransformCallback, TransformOptions } from 'node:stream';
 import stream from 'node:stream';
 import zlib from 'node:zlib';
 
 import type { IUpload } from '@rocket.chat/core-typings';
-import { Logger } from '@rocket.chat/logger';
 
 import { getContentDisposition } from './helper';
 import { UploadFS } from '../../../../ufs';
 import { FileUploadClass, FileUpload } from '../lib/FileUpload';
 import { getFileRange, setRangeHeaders } from '../lib/ranges';
-
-const logger = new Logger('FileUpload');
-
-class ExtractRange extends stream.Transform {
-	private start: number;
-
-	private stop: number;
-
-	private bytes_read: number;
-
-	constructor(options: TransformOptions & { start: number; stop: number }) {
-		super(options);
-
-		this.start = options.start;
-		this.stop = options.stop;
-		this.bytes_read = 0;
-	}
-
-	override _transform(chunk: any, _enc: BufferEncoding, cb: TransformCallback) {
-		if (this.bytes_read > this.stop) {
-			// done reading
-			this.end();
-		} else if (this.bytes_read + chunk.length < this.start) {
-			// this chunk is still before the start byte
-		} else {
-			let start;
-			let stop;
-
-			if (this.start <= this.bytes_read) {
-				start = 0;
-			} else {
-				start = this.start - this.bytes_read;
-			}
-			if (this.stop - this.bytes_read + 1 < chunk.length) {
-				stop = this.stop - this.bytes_read + 1;
-			} else {
-				stop = chunk.length;
-			}
-			const newchunk = chunk.slice(start, stop);
-			this.push(newchunk);
-		}
-		this.bytes_read += chunk.length;
-		cb();
-	}
-}
 
 // code from: https://github.com/jalik/jalik-ufs/blob/master/ufs-server.js#L310
 const readFromGridFS = async function (
@@ -68,10 +21,20 @@ const readFromGridFS = async function (
 		return;
 	}
 	const store = UploadFS.getStore(storeName);
-	const rs = await store.getReadStream(fileId, file);
-	const ws = new stream.PassThrough();
 
 	res.setHeader('Accept-Ranges', 'bytes');
+
+	const range = getFileRange(file, req);
+	if (range) {
+		setRangeHeaders(range, file, res);
+
+		if (range.outOfRange) {
+			return;
+		}
+	}
+
+	const rs = await store.getReadStream(fileId, file, range && { start: range.start, end: range.stop });
+	const ws = new stream.PassThrough();
 
 	[rs, ws].forEach((stream) =>
 		stream.on('error', (err) => {
@@ -88,16 +51,8 @@ const readFromGridFS = async function (
 	// Transform stream
 	store.transformRead(rs, ws, fileId, file, req);
 
-	const range = getFileRange(file, req);
 	if (range) {
-		setRangeHeaders(range, file, res);
-
-		if (range.outOfRange) {
-			return;
-		}
-
-		logger.debug('File upload extracting range');
-		ws.pipe(new ExtractRange({ start: range.start, stop: range.stop })).pipe(res);
+		ws.pipe(res);
 		return;
 	}
 

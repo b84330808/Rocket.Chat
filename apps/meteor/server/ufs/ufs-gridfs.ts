@@ -52,7 +52,7 @@ export class GridFSStore extends UploadFS.Store {
 			}
 		};
 
-		this.getReadStream = async function (fileId: string, _file: IUpload, options?: { end?: number }) {
+		this.getReadStream = async function (fileId: string, _file: IUpload, options?: { start?: number; end?: number }) {
 			options = Object.assign({}, options);
 			// https://mongodb.github.io/node-mongodb-native/4.4/interfaces/GridFSBucketReadStreamOptionsWithRevision.html#end
 			// according to the mongodb doc, the end is 0-based offset in bytes to stop streaming before -<< BEFORE
@@ -60,7 +60,7 @@ export class GridFSStore extends UploadFS.Store {
 			// <range-end> an integer in the given unit indicating the end position (zero-indexed & inclusive) of the requested range. -<< inclusive
 			// so before there always one byte miss, then browser will send a start=end request, with case fail to get the DB's last byte
 			// this will leads to audio's duration Infinite and keep waiting...
-			if (options?.end) {
+			if (options.end !== undefined) {
 				options.end += 1;
 			}
 			return mongoStore.openDownloadStream(fileId as unknown as ObjectId, options);
